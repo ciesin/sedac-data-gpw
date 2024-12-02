@@ -1,0 +1,13 @@
+Open up a workbook (e.g. 'Estonia_2011_ingest.xlsx')
+
+Go to File --> Options --> Customize Ribbon
+
+On the right slide of the option window, enable Developer tab on the ribbon.
+
+Go back to sheet (any one is ok), click on developer --> Visual Basic
+
+this will open up a visual basic window.
+
+On the left hand side click on the workbook your are working on (in case you have many workbooks opened at the same time)
+
+Right click on the name and import file (the file is located in \\Dataserver0\gpw\GPW4\Scripts\vba_scripts folder)
