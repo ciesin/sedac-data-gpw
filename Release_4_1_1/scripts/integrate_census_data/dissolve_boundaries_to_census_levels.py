@@ -1,0 +1,91 @@
+# Jane Mills
+# 12/8/2020
+# GPW
+# dissolve boundaries to all levels of input data
+
+import arcpy, os
+arcpy.env.overwriteOutput = True
+
+tableFolder = r'\\dataserver1\gpw\GPW4\Release_4_1\Alpha\Gridding\global\tables\processed_pop_tables'
+inFolder = r'\\Dataserver1\gpw\GPW4\Release_411\data\boundaries\adjusted_boundaries_with_census_data'
+
+boundaryGDBs = [os.path.join(inFolder,b) for b in os.listdir(inFolder) if b[-4:] == '.gdb']
+boundaryGDBs.sort()
+
+boundaryGDB = boundaryGDBs[114]
+for boundaryGDB in boundaryGDBs:
+    iso = os.path.basename(boundaryGDB)[:-4]
+    print(iso)
+    
+    tableGDB = os.path.join(tableFolder,iso+".gdb")
+    
+    if not os.path.exists(tableGDB):
+        print("  Can't find table GDB")
+        continue
+    
+    arcpy.env.workspace = boundaryGDB
+    fc = arcpy.ListFeatureClasses()
+    fc.sort()
+    if len(fc) > 1:
+        fc = [fc[-1]]
+        #print("  Did you already process this country?")
+        #continue
+    
+    fcName = fc[0]
+    fcPath = os.path.join(boundaryGDB, fcName)
+    level = fcName.split("_")[1]
+    
+    arcpy.env.workspace = tableGDB
+    
+    rawTables = arcpy.ListTables("*raw")
+    rawTables.sort()
+    
+    if len(rawTables) == 0:
+        print("  Didn't find any raw tables")
+        continue
+
+    rawlevels = [r.split("_")[1] for r in rawTables]
+    dissLevels = [r for r in rawlevels if r != level]
+    
+    if len(dissLevels) > 0:
+        dissLevels = list(set(dissLevels))
+        dissLevels.sort()
+        
+        aLevel = dissLevels[0]
+        for aLevel in dissLevels:
+            outFC = os.path.join(boundaryGDB, iso+"_"+aLevel+"_boundaries")
+            levelnum = int(aLevel[-1])
+            
+            dissFields = ['ISOALPHA']+['UCADMIN'+str(l) for l in range(levelnum+1)]+['NAME'+str(l) for l in range(levelnum+1)]
+            arcpy.Dissolve_management(fcPath, outFC, dissFields)
+            
+            for i in range(levelnum+1,7):
+                arcpy.AddField_management(outFC,"UCADMIN"+str(i),"TEXT","","",50)
+                arcpy.AddField_management(outFC,"NAME"+str(i),"TEXT","","",100)
+            
+            arcpy.AddField_management(outFC,'CONTEXT','SHORT')
+            arcpy.AddField_management(outFC,'CONTEXT_NM','TEXT',"","",100)
+            arcpy.AddField_management(outFC,'WATER_CODE','TEXT',"","",2)
+            
+            count = 0
+            uFields = ['NAME'+aLevel[-1],'CONTEXT','CONTEXT_NM','WATER_CODE'] + ['UCADMIN'+str(i) for i in range(levelnum+1,7)] + ['NAME'+str(i) for i in range(levelnum+1,7)]
+            with arcpy.da.UpdateCursor(outFC,uFields) as cursor:
+                for row in cursor:
+                    if row[0] == 'NA':
+                        count += 1
+                        cursor.deleteRow()
+                    else:
+                        row[1] = 0
+                        row[2] = 'Not applicable'
+                        row[3] = 'L'
+                        row[4:] = ['NA']*len(row[4:])
+                        cursor.updateRow(row)
+            
+            if count > 0:
+                arcpy.MakeFeatureLayer_management(fcPath,'NAs',"NAME"+aLevel[-1]+" = 'NA'")
+                
+                result = arcpy.GetCount_management('NAs')[0]
+                print("  Adding {} NA features".format(result))
+                
+                arcpy.Append_management('NAs',outFC,'NO_TEST')
+

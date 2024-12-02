@@ -1,3 +1,0 @@
-Value	CATEGORY
-0	Total Water Pixels
-1	Partial Water Pixels
