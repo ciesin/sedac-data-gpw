@@ -1,0 +1,187 @@
+# apply variable proportions
+# script generates proportions from age, sex, and age sex tables
+import os, datetime
+import multiprocessing
+import arcpy
+arcpy.env.overwriteOutput=True
+scriptTime = datetime.datetime.now()
+
+def calculateAgeSexProportions(inAgeSexTable):
+    arcpy.env.overwriteOutput=True
+    returnList = []
+    age_sexProportions = inAgeSexTable + "_proportions"
+    memTable = age_sexProportions#'in_memory' + os.sep + os.path.basename(age_sexProportions)
+    try:
+        arcpy.CopyRows_management(inAgeSexTable,memTable)
+##        return (0,arcpy.GetMessages())
+        returnFields = []
+        for sex in ['F','M']:
+            sexFields = [f.name for f in arcpy.ListFields(memTable,"A*"+sex+"T")]
+            #leave out anr and any fields without age categories
+            fieldList = []
+            propFields = []
+            for f in sexFields:
+                if not "ANR" in f:
+                    if not "A000_014"+sex+"T" in f:
+                        if not "A015_064"+sex+"T" in f:
+                            with arcpy.da.SearchCursor(inAgeSexTable,f,'OBJECTID = 1') as cursor:
+                                for row in cursor:
+                                    if not row[0] is None and not f in fieldList:
+                                        fieldList.append(f)                    
+            fieldList.sort()
+            # add CALC_ATOTPOPMT and CALC_ATOTPOPFT
+            arcpy.AddField_management(memTable,"CALC_ATOTPOP"+sex+"T","DOUBLE")
+            for f in fieldList:
+                arcpy.AddField_management(memTable,f+"_PROP","DOUBLE")
+                propFields.append(f+"_PROP")
+            propFields.sort
+            returnFields.append(propFields)
+            searchFields = ["CALC_ATOTPOP"+sex+"T"] + fieldList + propFields
+            #Calculate proportions
+            try:
+                with arcpy.da.UpdateCursor(memTable,searchFields) as urows:
+                    for row in urows:
+                        total=0
+                        for i in range(len(row)):
+                            value = row[i]
+                            return value
+                            if value <> None:
+                                total+=value
+                        return total
+                        row[0] = sum(row[2:(len(searchFields)/2)+1])
+                        total = row[0]
+                        for i in range((len(searchFields)/2)+1,len(searchFields)):
+                            if total > 0:
+                                row[i] = row[i-(len(searchFields)/2)+1]/total
+                            else:
+                                row[i] = 0
+                        cursor.updateRow(row)
+            except:
+                return (memTable,searchFields)
+            
+        #arcpy.CopyRows_management(memTable,age_sexProportions)
+        return (1,age_sexProportions,returnFields)
+    except:
+        return (0,inAgeSexTable,arcpy.GetMessages())
+
+def process(gdb):
+    arcpy.env.overwriteOutput = True
+    processTime = datetime.datetime.now()
+    returnList = []
+    try:
+        arcpy.env.workspace = gdb
+        iso = os.path.basename(gdb)[:-4].lower()
+        if iso == 'vcs':
+            returnList.append("VCS does not have variables data")
+            return returnList
+        # grab the lookup table
+        lookupTable = arcpy.ListTables("*lookup")[0]
+        # parse the admin level and year
+        tableSplit = lookupTable.split("_")
+        admin = tableSplit[1]
+        adminNum = int(admin[-1])
+        year = tableSplit[2]
+        # list the sexTables
+        ageTables = arcpy.ListTables("*age_sex_group")
+        # if the length of sexTables is 1 and sexAdmin is
+        # admin of that table
+        if len(ageTables)==1:
+            ageAdmin = ageTables[0].split("_")[1]
+        else:
+            # otherwise select the largest admin level
+            adminIntList = []
+            for ageTable in ageTables:
+                adminIntList.append(int(ageTable.split("_")[1][-1]))
+            ageAdminNum = max(adminIntList)
+            ageAdmin = "admin"+str(ageAdminNum)
+        # calculate the age proportions
+        age_sexIn = gdb + os.sep + iso +"_" + ageAdmin + "_" + year + "_age_sex_group"
+        try:
+            age_sexProportionsCalc = calculateAgeSexProportions(age_sexIn)
+        except:
+            return (iso + ' error: age/sex proportions calculation')
+        if age_sexProportionsCalc[0]==0:
+            return age_sexProportionsCalc
+        age_sexProportions = age_sexProportionsCalc[1]
+        age_sexPropFields = age_sexProportionsCalc[2]
+        return age_sexProportionsCalc
+
+
+
+        # read the files into dictionaries
+        try:
+            sexPropDict = getVariableDict((sexProportions,["USCID"]+ sexPropFields))
+        except:
+            return (iso + ' error reading sex proportions dictionary')
+        # grab the estimates table
+        estimatesIn = gdb + os.sep + iso +"_" + admin + "_" + year + "_estimates"                    
+        estimatesSearchFields = ["USCID","E_ATOTPOPBT_2010"]
+        # read the files into dictionaries
+        try:
+            estimatesDict = getVariableDict((estimatesIn,estimatesSearchFields))
+        except:
+            return (iso + ' error reading estimates dictionary dictionary')
+        # if sexAdmin < admin the apply lower level data
+        if sexAdmin < admin:
+            # define outSexTable
+            outSexTable = iso + "_" + admin + "_" + year + "_sex"
+            # read the table into a dict
+            lookupDict = {}
+            with arcpy.da.SearchCursor(lookupTable,["USCID","LLUSCID"]) as lRows:
+                for lRow in lRows:
+                    lookupDict[lRow[0]]=lRow[1]
+            try:
+                sexTableCalc = applyLLSexProportions(sexProportions,outSexTable,lookupDict)
+                if sexTableCalc[0]==0:
+                    return (iso + ' error: on sex proportions application', sexTableCalc)
+                sexTable = sexTableCalc[1]
+                try:
+                    sexProportionsCalc = calculateSexProportions(sexTable)
+                except:
+                    return (iso + ' error: sex proportions calculation')
+                if sexProportionsCalc[0]==0:
+                    return sexProportionsCalc
+                sexProportions = sexProportionsCalc[1]
+                sexPropFields = sexProportionsCalc[2]
+                # read the files into dictionaries
+                try:
+                    sexPropDict = getVariableDict((sexProportions,["USCID"]+ sexPropFields))
+                except:
+                    return (iso + ' error reading sex proportions dictionary')
+            except:
+                return (iso + ' error applying LL sex proportions', sexTableCalc)
+        try:
+            # grab the sex seachFields
+            sexSearchFields = getSearchFields(sexIn)
+            estimates_with_sex = applySexProportions(estimatesIn,estimatesDict,sexSearchFields,sexPropDict,0)
+            if estimates_with_sex[0]==0:
+                return (iso + ' error applying sex proportions',estimates_with_sex)
+            else:
+                estimatesOut = estimates_with_sex[1]
+        except:
+            return (iso + ' error applying sex proportions')
+        returnList.append("Processed "+ estimatesOut + " " + str(datetime.datetime.now()-processTime))    
+    except:
+        returnList.append("Error while processing " + iso + " " + str(datetime.datetime.now()-processTime))
+        returnList.append(arcpy.GetMessages())
+
+    return returnList
+
+def main():
+    workspace = r'D:\gpw\release_4_1\loading\processed'
+    arcpy.env.workspace = workspace
+    procList = arcpy.ListWorkspaces("irn*")
+    print "processing"
+    # must create procList
+    pool = multiprocessing.Pool(processes=1,maxtasksperchild=1)
+    results = pool.map(process, procList)
+    for result in results:
+        print result
+    # Synchronize the main process with the job processes to
+    # ensure proper cleanup.
+    pool.close()
+    pool.join()
+    print "Script Complete in " + str(datetime.datetime.now()-scriptTime)
+ 
+if __name__ == '__main__':
+    main()
